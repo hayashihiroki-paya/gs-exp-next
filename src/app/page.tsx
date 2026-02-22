@@ -37,6 +37,14 @@ export default function Home() {
   const [newPost, setNewPost] = useState("");
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  // ========================================
+  // State に追加
+  // ========================================
+
+  const [animatingId, setAnimatingId] = useState<number | null>(null);
+  // → いいねアニメーション用
+
+  const [uploading, setUploading] = useState(false);  // 画像アップロード中
 
   // ========================================
   // Hooks の初期化
@@ -53,6 +61,10 @@ export default function Home() {
     checkAuth();
   }, []);
 
+  // ========================================
+  // 認証確認を更新
+  // ========================================
+
   const checkAuth = async () => {
     const { data: { user } } = await supabase.auth.getUser();
 
@@ -63,16 +75,22 @@ export default function Home() {
 
     setUser(user);
     setLoading(false);
-    fetchPosts();
+    // ユーザーIDを渡して投稿を取得
+    fetchPosts(user.id);
   };
 
   // ========================================
-  // 投稿一覧を取得
+  // 投稿一覧を取得（更新）
   // ========================================
 
-  const fetchPosts = async () => {
+  const fetchPosts = async (userId?: string) => {
     try {
-      const response = await fetch(`${API_URL}/api/posts`);
+      // userId をクエリパラメータで送る
+      const url = userId
+        ? `${API_URL}/api/posts?userId=${userId}`
+        : `${API_URL}/api/posts`;
+
+      const response = await fetch(url);
       const data = await response.json();
       setPosts(data);
     } catch (error) {
@@ -80,15 +98,31 @@ export default function Home() {
     }
   };
 
+
+
   // ========================================
-  // 投稿を作成
+  // 投稿を作成（画像付き）
   // ========================================
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent, imageFile: File | null) => {
     e.preventDefault();
-    if (!newPost.trim()) return;
+    if (!newPost.trim() || !user) return;
+
+    setUploading(true);
 
     try {
+      let imageUrl: string | null = null;
+
+      // 画像が選択されていればアップロード
+      if (imageFile) {
+        imageUrl = await uploadImage(imageFile);
+        if (!imageUrl) {
+          alert("画像のアップロードに失敗しました");
+          setUploading(false);
+          return;
+        }
+      }
+
       const response = await fetch(`${API_URL}/api/posts`, {
         method: "POST",
         headers: {
@@ -96,7 +130,8 @@ export default function Home() {
         },
         body: JSON.stringify({
           content: newPost,
-          userId: user?.id,
+          imageUrl,
+          userId: user.id,
         }),
       });
 
@@ -105,9 +140,40 @@ export default function Home() {
       }
 
       setNewPost("");
-      fetchPosts();
+      fetchPosts(user.id);
     } catch (error) {
       console.error("Error creating post:", error);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // ========================================
+  // 画像をアップロード
+  // ========================================
+
+  const uploadImage = async (file: File): Promise<string | null> => {
+    try {
+      const fileExt = file.name.split(".").pop();
+      const fileName = `${user?.id}/${Date.now()}.${fileExt}`;
+
+      const { data, error } = await supabase.storage
+        .from("images")
+        .upload(fileName, file);
+
+      if (error) {
+        console.error("Upload error:", error);
+        return null;
+      }
+
+      const { data: { publicUrl } } = supabase.storage
+        .from("images")
+        .getPublicUrl(data.path);
+
+      return publicUrl;
+    } catch (error) {
+      console.error("Error uploading image:", error);
+      return null;
     }
   };
 
@@ -130,6 +196,52 @@ export default function Home() {
       fetchPosts();
     } catch (error) {
       console.error("Error deleting post:", error);
+    }
+  };
+
+  // ========================================
+  // いいね処理（新規追加）
+  // ========================================
+
+  const handleLike = async (postId: number, isLiked: boolean) => {
+    if (!user) return;
+
+    // アニメーション開始
+    setAnimatingId(postId);
+    setTimeout(() => setAnimatingId(null), 400);
+
+    try {
+      const method = isLiked ? "DELETE" : "POST";
+
+      const response = await fetch(`${API_URL}/api/posts/${postId}/like`, {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          userId: user.id,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("いいねに失敗しました");
+      }
+
+      const data = await response.json();
+
+      // 投稿一覧を更新（該当の投稿だけ更新）
+      setPosts(posts.map(post => {
+        if (post.id === postId) {
+          return {
+            ...post,
+            likeCount: data.likeCount,
+            isLiked: data.isLiked,
+          };
+        }
+        return post;
+      }));
+    } catch (error) {
+      console.error("Error toggling like:", error);
     }
   };
 
@@ -173,6 +285,7 @@ export default function Home() {
           value={newPost}
           onChange={setNewPost}
           onSubmit={handleSubmit}
+          disabled={uploading}     // Day3 追加
         />
 
         {/* タイムライン */}
@@ -186,7 +299,9 @@ export default function Home() {
               <PostCard
                 key={post.id}
                 post={post}
-                onDelete={handleDelete}
+                onDelete={post.userId === user?.id ? handleDelete : undefined}
+                onLike={handleLike}
+                isAnimating={animatingId === post.id}
               />
             ))
           )}

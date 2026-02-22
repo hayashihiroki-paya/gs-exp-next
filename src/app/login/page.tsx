@@ -73,7 +73,7 @@ export default function LoginPage() {
     // try catchを使って認証処理をする
     try {
       if (isLogin) {
-        // signInWithPassword メールパスワードでログイン supabassの機能
+        // signInWithPassword メールパスワードでログイン supabaseの機能
         const { error } = await supabase.auth.signInWithPassword({
           email,
           password,
